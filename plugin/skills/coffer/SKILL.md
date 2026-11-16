@@ -119,6 +119,7 @@ Storing a new secret takes effect immediately. Use `--tier high` for signing key
 
 ## Setup (for the owner, not for you)
 
-- MCP for Claude Code: `claude mcp add coffer -- coffer mcp`
-- This skill: `coffer skill install` (writes `~/.claude/skills/coffer/SKILL.md`)
+- Install: `brew install owo-network/brew/coffer`
+- Claude Code (MCP + this skill in one step): `/plugin install coffer --marketplace missuo/coffer-releases`
+- Or manually: `claude mcp add --scope user coffer -- coffer mcp` and `coffer skill install`
 - Audit: `coffer audit --agent claude-code --since 7d`, `coffer audit --project myapp`, `coffer audit verify`
