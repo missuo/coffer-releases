@@ -17,4 +17,31 @@ codesign --verify --strict --verbose=2 coffer          # macOS
 codesign -dv coffer 2>&1 | grep -E "Authority|TeamIdentifier|Runtime"
 ```
 
+## Install
+
+```bash
+brew install owo-network/brew/coffer          # macOS (signed + notarized) and Linux
+```
+
+## Use with AI agents
+
+The MCP server and the agent skill ship **inside the `coffer` binary**, and as a Claude Code plugin in this repo.
+
+**Claude Code plugin** (MCP server + skill in one step; needs `coffer` on your PATH):
+
+```
+/plugin install coffer --marketplace missuo/coffer-releases
+```
+
+or: `/plugin marketplace add missuo/coffer-releases` then `/plugin install coffer@coffer`.
+
+**Manually** (any agent):
+
+```bash
+coffer skill install                         # ~/.claude/skills/coffer/SKILL.md (or --target codex / <dir>)
+claude mcp add --scope user coffer -- coffer mcp
+```
+
+The skill is also in [`plugin/skills/coffer/SKILL.md`](plugin/skills/coffer/SKILL.md) and attached to every release as `coffer-<version>-SKILL.md`.
+
 Source code is not published here.

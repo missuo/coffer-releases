@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "coffer",
+  "description": "Coffer: end-to-end encrypted credentials your AI agents can use without seeing them.",
+  "owner": {
+    "name": "missuo",
+    "url": "https://github.com/missuo/coffer-releases"
+  },
+  "plugins": [
+    {
+      "name": "coffer",
+      "description": "Coffer MCP server (run commands with secrets, short-lived tokens, push CI secrets) plus the skill that teaches agents to use it safely. Requires the coffer CLI: brew install owo-network/brew/coffer",
+      "source": "./plugin"
+    }
+  ]
+}

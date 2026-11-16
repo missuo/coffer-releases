@@ -39,6 +39,11 @@ jobs:
           path: src
           persist-credentials: false
 
+      - name: Check out this repo (plugin files)
+        uses: actions/checkout@v7
+        with:
+          path: self
+
       - name: Toolchain
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl
@@ -116,6 +121,7 @@ jobs:
           tar -C dist/linux-x86_64 -czf "out/coffer-$VERSION-linux-x86_64.tar.gz" coffer
           tar -C dist/linux-aarch64 -czf "out/coffer-$VERSION-linux-aarch64.tar.gz" coffer
           (cd out && shasum -a 256 *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          cp src/skills/coffer/SKILL.md "out/coffer-$VERSION-SKILL.md"
 
       - name: Publish release
         env:
@@ -137,6 +143,23 @@ jobs:
           Verify with \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
           EOF
           )"
+
+      - name: Sync Claude Code plugin (skill + version) to main
+        working-directory: self
+        run: |
+          cp ../src/skills/coffer/SKILL.md plugin/skills/coffer/SKILL.md
+          python3 - "$VERSION" <<'PY'
+          import json, sys
+          p = "plugin/.claude-plugin/plugin.json"
+          d = json.load(open(p)); d["version"] = sys.argv[1]
+          open(p, "w").write(json.dumps(d, indent=2) + "\n")
+          PY
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -am "plugin: sync skill and version for $VERSION"
+            git push origin HEAD:main
+          fi
 
       - name: Clean up keychain
         if: always()
