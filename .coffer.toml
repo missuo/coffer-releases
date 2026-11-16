@@ -1,0 +1,14 @@
+# Secrets the release workflow needs, pushed with `coffer push github`.
+# Only references to Coffer items live here — no values.
+
+[github]
+repo = "missuo/coffer-releases"
+environment = "release"
+
+[github.secrets]
+APPLE_P12_BASE64   = { ref = "apple/NCFNX3LJ83/developer-id#p12", encode = "base64" }
+APPLE_P12_PASSWORD = "apple/NCFNX3LJ83/developer-id#password"
+APPLE_ID           = "apple/NCFNX3LJ83/notary#apple_id"
+APPLE_TEAM_ID      = "apple/NCFNX3LJ83/notary#team_id"
+APPLE_APP_PASSWORD = "apple/NCFNX3LJ83/notary#app_password"
+SOURCE_DEPLOY_KEY  = "github/coffer-deploy-key#content"

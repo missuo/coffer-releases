@@ -1,0 +1,145 @@
+# Build, sign, notarize and publish Coffer from the private source repo.
+#
+# Runs only when started by hand (workflow_dispatch) — never on pull requests,
+# so secrets are never exposed to forks. Signing material lives in the
+# `release` environment's secrets and is pushed there with `coffer push github`.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or commit of missuo/coffer to build (e.g. v0.2.0)"
+        required: true
+      version:
+        description: "Release version without the v (e.g. 0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: release
+    env:
+      VERSION: ${{ inputs.version }}
+      TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Check out source (read-only deploy key)
+        uses: actions/checkout@v7
+        with:
+          repository: missuo/coffer
+          ref: ${{ inputs.ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          path: src
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          brew install zig cargo-zigbuild
+          test "$(grep -m1 '^version' src/Cargo.toml | cut -d'"' -f2)" = "$VERSION" || { echo "::error::Cargo.toml version does not match input $VERSION"; exit 1; }
+
+      - name: Build macOS (universal)
+        working-directory: src
+        run: |
+          cargo build --release --locked -p coffer-cli --target aarch64-apple-darwin
+          cargo build --release --locked -p coffer-cli --target x86_64-apple-darwin
+          mkdir -p ../dist/macos
+          lipo -create -output ../dist/macos/coffer \
+            target/aarch64-apple-darwin/release/coffer target/x86_64-apple-darwin/release/coffer
+          lipo -info ../dist/macos/coffer
+
+      - name: Build Linux (static musl)
+        working-directory: src
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo zigbuild --release --locked -p coffer-cli --target "$t"
+            arch="${t%%-*}"; mkdir -p "../dist/linux-$arch"
+            cp "target/$t/release/coffer" "../dist/linux-$arch/coffer"
+          done
+
+      - name: Import signing identity (temporary keychain)
+        env:
+          P12_BASE64: ${{ secrets.APPLE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_P12_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/signing.keychain-db"
+          KC_PW="$(openssl rand -hex 24)"
+          echo "::add-mask::$KC_PW"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN=$KC" >> "$GITHUB_ENV"
+
+      - name: Sign (Developer ID, hardened runtime, timestamp)
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep "Developer ID Application" | grep "($TEAM_ID)" | head -1 | awk '{print $2}')
+          test -n "$IDENTITY" || { echo "::error::Developer ID identity for $TEAM_ID not found"; exit 1; }
+          codesign --force --options runtime --timestamp --keychain "$KEYCHAIN" --sign "$IDENTITY" dist/macos/coffer
+          codesign --verify --strict --verbose=2 dist/macos/coffer
+          codesign -dv dist/macos/coffer 2>&1 | grep -E "Authority=Developer ID Application|TeamIdentifier|flags=.*runtime"
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ditto -c -k --keepParent dist/macos/coffer "$RUNNER_TEMP/coffer-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/coffer-notarize.zip" \
+            --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json"
+          cat "$RUNNER_TEMP/notary.json"
+          STATUS=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$RUNNER_TEMP/notary.json")
+          if [ "$STATUS" != "Accepted" ]; then
+            ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$RUNNER_TEMP/notary.json")
+            xcrun notarytool log "$ID" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APPLE_APP_PASSWORD" || true
+            echo "::error::notarization status: $STATUS"; exit 1
+          fi
+          # A bare Mach-O cannot be stapled; Gatekeeper checks the ticket online.
+          spctl --assess --type install --verbose=2 dist/macos/coffer 2>&1 || true
+
+      - name: Package
+        run: |
+          mkdir -p out
+          tar -C dist/macos -czf "out/coffer-$VERSION-macos-universal.tar.gz" coffer
+          tar -C dist/linux-x86_64 -czf "out/coffer-$VERSION-linux-x86_64.tar.gz" coffer
+          tar -C dist/linux-aarch64 -czf "out/coffer-$VERSION-linux-aarch64.tar.gz" coffer
+          (cd out && shasum -a 256 *.tar.gz > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.ref }}
+        run: |
+          SHA=$(git -C src rev-parse --short HEAD)
+          gh release create "v$VERSION" out/* -R "$GITHUB_REPOSITORY" --title "Coffer $VERSION" --notes "$(cat <<EOF
+          Coffer $VERSION (source ${SHA}).
+
+          - **macOS** (universal): signed with Developer ID ($TEAM_ID), hardened runtime, notarized by Apple.
+          - **Linux** x86_64 / arm64: static musl builds.
+
+          Install:
+          \`\`\`bash
+          tar -xzf coffer-$VERSION-macos-universal.tar.gz && mv coffer ~/.local/bin/   # or /usr/local/bin
+          coffer --version
+          \`\`\`
+          Verify with \`shasum -a 256 -c SHA256SUMS --ignore-missing\`.
+          EOF
+          )"
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          [ -n "${KEYCHAIN:-}" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$RUNNER_TEMP"/cert.p12 "$RUNNER_TEMP"/coffer-notarize.zip
