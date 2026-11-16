@@ -1,6 +1,6 @@
 {
   "name": "coffer",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Use your credentials (Apple signing, App Store Connect, Cloudflare, GitHub, API tokens) without exposing them to the agent: Coffer MCP server + agent skill.",
   "author": {
     "name": "missuo",
